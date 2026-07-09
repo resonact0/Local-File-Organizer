@@ -1,4 +1,4 @@
-cmake
+ollama
 pytesseract
 PyMuPDF
 python-docx

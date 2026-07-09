@@ -83,13 +83,13 @@ This intelligent file organizer harnesses the power of advanced AI models, inclu
 
 * Scanning a specified input directory for files.
 * Content Understanding: 
-  - **Textual Analysis**: Uses the [Llama3.2 3B](https://nexaai.com/meta/Llama3.2-3B-Instruct/gguf-q3_K_M/file) to analyze and summarize text-based content, generating relevant descriptions and filenames.
-  - **Visual Content Analysis**: Uses the [LLaVA-v1.6](https://nexaai.com/liuhaotian/llava-v1.6-vicuna-7b/gguf-q4_0/file) , based on Vicuna-7B, to interpret visual files such as images, providing context-aware categorization and descriptions.
+  - **Textual Analysis**: Uses [Llama3.2 3B](https://ollama.com/library/llama3.2) (served via Ollama) to analyze and summarize text-based content, generating relevant descriptions and filenames.
+  - **Visual Content Analysis**: Uses [LLaVA 7B](https://ollama.com/library/llava), based on Vicuna-7B, to interpret visual files such as images, providing context-aware categorization and descriptions.
 
 * Understanding the content of your files (text, images, and more) to generate relevant descriptions, folder names, and filenames.
 * Organizing the files into a new directory structure based on the generated metadata.
 
-The best part? All AI processing happens 100% on your local device using the [Nexa SDK](https://github.com/NexaAI/nexa-sdk). No internet connection required, no data leaves your computer, and no AI API is needed - keeping your files completely private and secure.
+The best part? All AI processing happens 100% on your local device using [Ollama](https://ollama.com). No internet connection required after the initial model download, no data leaves your computer, and no AI API is needed - keeping your files completely private and secure.
 
 
 ## Supported File Types 📁
@@ -104,18 +104,23 @@ The best part? All AI processing happens 100% on your local device using the [Ne
 
 - **Operating System:** Compatible with Windows, macOS, and Linux.
 - **Python Version:** Python 3.12
-- **Conda:** Anaconda or Miniconda installed.
+- **Ollama:** Used to run the local text and vision-language models (native install or Docker).
 - **Git:** For cloning the repository (or you can download the code as a ZIP file).
 
-## Installation 🛠
+> **Note (2026 update):** This project originally ran on the Nexa SDK. Nexa AI was acquired by
+> Qualcomm and its SDK was rebranded as GenieX, which only targets Qualcomm Snapdragon/ARM64
+> hardware — it no longer works on generic x86_64 machines, and the legacy `nexaai` PyPI package's
+> installer is broken (its binary download now returns `403 Forbidden`). This fork instead uses
+> [Ollama](https://ollama.com) to run the local models, which works on any CPU (and GPU, if
+> available) on Windows, macOS, and Linux.
 
-> For SDK installation and model-related issues, please post on [here](https://github.com/NexaAI/nexa-sdk/issues).
+## Installation 🛠
 
 ### 1. Install Python
 
 Before installing the Local File Organizer, make sure you have Python installed on your system. We recommend using Python 3.12 or later.
 
-You can download Python from [the official website]((https://www.python.org/downloads/)).
+You can download Python from [the official website](https://www.python.org/downloads/).
 
 Follow the installation instructions for your operating system.
 
@@ -131,35 +136,38 @@ Or download the repository as a ZIP file and extract it to your desired location
 
 ### 3. Set Up the Python Environment
 
-Create a new Conda environment named `local_file_organizer` with Python 3.12:
+Create a virtual environment with Python 3.12:
 
 ```zsh
-conda create --name local_file_organizer python=3.12
+cd path/to/Local-File-Organizer
+python3 -m venv venv
 ```
 
 Activate the environment:
 
 ```zsh
-conda activate local_file_organizer
+source venv/bin/activate   # macOS/Linux
+venv\Scripts\activate      # Windows
 ```
 
-### 4. Install Nexa SDK ️
+### 4. Install and Run Ollama
 
-#### CPU Installation
-To install the CPU version of Nexa SDK, run:
-```bash
-pip install nexaai --prefer-binary --index-url https://nexaai.github.io/nexa-sdk/whl/cpu --extra-index-url https://pypi.org/simple --no-cache-dir
+Install Ollama natively (see [ollama.com/download](https://ollama.com/download)), or run it via Docker:
+
+```zsh
+docker run -d --name ollama -v ollama:/root/.ollama -p 11434:11434 --restart unless-stopped ollama/ollama
 ```
 
-#### GPU Installation (Metal - macOS)
-For the GPU version supporting Metal (macOS), run:
-```bash
-CMAKE_ARGS="-DGGML_METAL=ON -DSD_METAL=ON" pip install nexaai --prefer-binary --index-url https://nexaai.github.io/nexa-sdk/whl/metal --extra-index-url https://pypi.org/simple --no-cache-dir
+Then pull the models this project uses:
+
+```zsh
+ollama pull llama3.2:3b
+ollama pull llava:7b
 ```
-For detailed installation instructions of Nexa SDK for **CUDA** and **AMD GPU** support, please refer to the [Installation section](https://github.com/NexaAI/nexa-sdk?tab=readme-ov-file#installation) in the main README.
 
+(If you started Ollama via Docker, prefix these with `docker exec ollama`.)
 
-### 5. Install Dependencies 
+### 5. Install Dependencies
 
 1. Ensure you are in the project directory:
    ```zsh
@@ -175,7 +183,7 @@ For detailed installation instructions of Nexa SDK for **CUDA** and **AMD GPU** 
 **Note:** If you encounter issues with any packages, install them individually:
 
 ```zsh
-pip install nexa Pillow pytesseract PyMuPDF python-docx
+pip install ollama Pillow pytesseract PyMuPDF python-docx
 ```
 
 With the environment activated and dependencies installed, run the script using:
@@ -187,10 +195,13 @@ python main.py
 
 ## Notes
 
-- **SDK Models:**
-  - The script uses `NexaVLMInference` and `NexaTextInference` models [usage](https://docs.nexaai.com/sdk/python-interface/gguf).
-  - Ensure you have access to these models and they are correctly set up.
-  - You may need to download model files or configure paths.
+- **Models:**
+  - The script uses Ollama-served `llama3.2:3b` (text) and `llava:7b` (vision) models via the
+    `OllamaTextInference`/`OllamaVLMInference` classes in `ollama_inference.py`.
+  - Ollama must be running (natively or via Docker) and reachable at `http://localhost:11434`
+    before starting `main.py`.
+  - You can swap in any other Ollama-compatible model by changing `model_path`/`model_path_text`
+    in `initialize_models()` in `main.py`, as long as you `ollama pull` it first.
 
 
 - **Dependencies:**

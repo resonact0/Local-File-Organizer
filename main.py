@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 
 from file_utils import (
@@ -24,13 +25,14 @@ from image_data_processing import (
 )
 
 from output_filter import filter_specific_output  # Import the context manager
-from nexa.gguf import NexaVLMInference, NexaTextInference  # Import model classes
+from ollama_inference import OllamaVLMInference, OllamaTextInference  # Import model classes
 
 def ensure_nltk_data():
     """Ensure that NLTK data is downloaded efficiently and quietly."""
     import nltk
     nltk.download('stopwords', quiet=True)
     nltk.download('punkt', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
     nltk.download('wordnet', quiet=True)
 
 # Initialize models
@@ -41,37 +43,20 @@ def initialize_models():
     """Initialize the models if they haven't been initialized yet."""
     global image_inference, text_inference
     if image_inference is None or text_inference is None:
-        # Initialize the models
-        model_path = "llava-v1.6-vicuna-7b:q4_0"
-        model_path_text = "Llama3.2-3B-Instruct:q3_K_M"
+        # Initialize the models (served locally by Ollama; run `ollama pull <model>` first)
+        model_path = "llava:7b"
+        model_path_text = "llama3.2:3b"
 
         # Use the filter_specific_output context manager
         with filter_specific_output():
             # Initialize the image inference model
-            image_inference = NexaVLMInference(
-                model_path=model_path,
-                local_path=None,
-                stop_words=[],
-                temperature=0.3,
-                max_new_tokens=3000,
-                top_k=3,
-                top_p=0.2,
-                profiling=False
-                # add n_ctx if out of context window usage: n_ctx=2048
+            image_inference = OllamaVLMInference(
+                model=model_path,
             )
 
             # Initialize the text inference model
-            text_inference = NexaTextInference(
-                model_path=model_path_text,
-                local_path=None,
-                stop_words=[],
-                temperature=0.5,
-                max_new_tokens=3000,  # Adjust as needed
-                top_k=3,
-                top_p=0.3,
-                profiling=False
-                # add n_ctx if out of context window usage: n_ctx=2048
-
+            text_inference = OllamaTextInference(
+                model=model_path_text,
             )
         print("**----------------------------------------------**")
         print("**       Image inference model initialized      **")
@@ -138,6 +123,11 @@ def main():
     # Ensure NLTK data is downloaded efficiently and quietly
     ensure_nltk_data()
 
+    # Optional CLI args let a wrapper script (e.g. run.sh) supply the folder
+    # to organize without an interactive prompt: `python main.py <input> [output]`
+    cli_input_path = sys.argv[1] if len(sys.argv) > 1 else None
+    cli_output_path = sys.argv[2] if len(sys.argv) > 2 else None
+
     # Start with dry run set to True
     dry_run = True
 
@@ -156,7 +146,12 @@ def main():
             print("-" * 50)
 
         # Get input and output paths once per directory
-        input_path = input("Enter the path of the directory you want to organize: ").strip()
+        if cli_input_path and os.path.exists(cli_input_path):
+            input_path = cli_input_path
+        else:
+            if cli_input_path:
+                print(f"Input path {cli_input_path} does not exist. Please enter a valid path.")
+            input_path = input("Enter the path of the directory you want to organize: ").strip()
         while not os.path.exists(input_path):
             message = f"Input path {input_path} does not exist. Please enter a valid path."
             if silent_mode:
@@ -165,6 +160,7 @@ def main():
             else:
                 print(message)
             input_path = input("Enter the path of the directory you want to organize: ").strip()
+        cli_input_path = None  # Only reuse the CLI-supplied path for the first directory
 
         # Confirm successful input path
         message = f"Input path successfully uploaded: {input_path}"
@@ -177,7 +173,11 @@ def main():
             print("-" * 50)
 
         # Default output path is a folder named "organized_folder" in the same directory as the input path
-        output_path = input("Enter the path to store organized files and folders (press Enter to use 'organized_folder' in the input directory): ").strip()
+        if cli_output_path:
+            output_path = cli_output_path
+        else:
+            output_path = input("Enter the path to store organized files and folders (press Enter to use 'organized_folder' in the input directory): ").strip()
+        cli_output_path = None  # Only reuse the CLI-supplied path for the first directory
         if not output_path:
             # Get the parent directory of the input path and append 'organized_folder'
             output_path = os.path.join(os.path.dirname(input_path), 'organized_folder')
