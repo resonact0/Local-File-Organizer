@@ -6,7 +6,7 @@ import sys
 import time
 
 import cli
-from ai_metadata import generate_broad_category
+from ai_metadata import generate_broad_category, induce_category_taxonomy
 from config import LOG_DIR, ModelConfig
 from data_processing_common import (
     compute_operations,
@@ -21,10 +21,10 @@ from file_utils import (
     separate_files_by_type,
     split_by_folder_trust,
 )
-from image_data_processing import process_image_files
+from image_data_processing import describe_image_files, name_image_files
 from logging_setup import configure_logging, get_logger
 from models import load_models
-from text_data_processing import process_text_files
+from text_data_processing import describe_text_files, name_text_files
 
 logger = get_logger(__name__)
 
@@ -53,20 +53,27 @@ def _group_by_top_folder(trusted_files, input_path):
     return groups
 
 
-def _mirror_operations(trusted_files, input_path, output_path, text_inference):
+def _folder_description(files, input_path):
+    """Turn the subfolder names under one trusted top-level folder into a
+    short text description, for feeding to the same classifier used for
+    AI-generated summaries (generate_broad_category / induce_category_taxonomy)."""
+    folder_names = sorted({
+        part
+        for fp in files
+        for part in os.path.relpath(fp, input_path).split(os.sep)[:-1]
+    })
+    return ' '.join(name.replace('_', ' ').replace('-', ' ') for name in folder_names)
+
+
+def _mirror_operations(trusted_files, input_path, output_path, text_inference, categories):
     """Build operations that keep already-well-organized files exactly where
     their existing folder structure puts them, nested under one broad-category
-    bucket (config.CATEGORY_TAXONOMY) per top-level folder. Only the folder
-    names themselves are used to pick the bucket -- no per-file AI reads."""
+    bucket per top-level folder. Only the folder names themselves are used to
+    pick the bucket -- no per-file AI reads."""
     operations = []
     for top_dir, files in _group_by_top_folder(trusted_files, input_path).items():
-        folder_names = sorted({
-            part
-            for fp in files
-            for part in os.path.relpath(fp, input_path).split(os.sep)[:-1]
-        })
-        description = ' '.join(name.replace('_', ' ').replace('-', ' ') for name in folder_names)
-        category = generate_broad_category(text_inference, description)
+        description = _folder_description(files, input_path)
+        category = generate_broad_category(text_inference, description, categories)
         logger.info("Bucketing folder '%s' (%d files) under category '%s'", top_dir, len(files), category)
 
         for fp in files:
@@ -126,10 +133,23 @@ def organize_by_content(file_paths, input_path, output_path, models, silent):
             continue
         text_tuples.append((fp, content))
 
-    image_metadata = process_image_files(image_files, models.image_inference, models.text_inference, silent=silent)
-    text_metadata = process_text_files(text_tuples, models.text_inference, silent=silent)
+    image_descriptions = describe_image_files(image_files, models.image_inference, silent=silent)
+    text_descriptions = describe_text_files(text_tuples, models.text_inference, silent=silent)
 
-    operations = _mirror_operations(trusted_files, input_path, output_path, models.text_inference)
+    folder_descriptions = [
+        _folder_description(files, input_path)
+        for files in _group_by_top_folder(trusted_files, input_path).values()
+    ]
+    categories = induce_category_taxonomy(
+        models.text_inference,
+        folder_descriptions + [d for _, d in image_descriptions] + [d for _, d in text_descriptions],
+    )
+    logger.info("Using content-derived top-level buckets: %s", ', '.join(categories))
+
+    image_metadata = name_image_files(image_descriptions, models.text_inference, categories, silent=silent)
+    text_metadata = name_text_files(text_descriptions, models.text_inference, categories, silent=silent)
+
+    operations = _mirror_operations(trusted_files, input_path, output_path, models.text_inference, categories)
     operations += compute_operations(image_metadata + text_metadata, output_path, renamed_files=set(), processed_files=set())
     operations += _other_operations(other_files, output_path)
     return operations

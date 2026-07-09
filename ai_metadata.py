@@ -5,13 +5,11 @@ the naming/cleanup pipeline for each content type."""
 
 import os
 import re
-import time
 from dataclasses import dataclass
 
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
 from config import CATEGORY_TAXONOMY
 from data_processing_common import sanitize_filename
@@ -101,8 +99,8 @@ Summary: {description}
 Category:"""
 
 
-def generate_broad_category(text_inference, description, categories=CATEGORY_TAXONOMY, fallback='other'):
-    """Classify a description into one of a small fixed set of top-level categories."""
+def generate_broad_category(text_inference, description, categories, fallback='other'):
+    """Classify a description into one of a small set of top-level categories."""
     prompt = BROAD_CATEGORY_PROMPT_TEMPLATE.format(categories=', '.join(categories), description=description)
     response = text_inference.create_completion(prompt)
     raw = _strip_label(response['choices'][0]['text'].strip(), 'Category')
@@ -112,31 +110,64 @@ def generate_broad_category(text_inference, description, categories=CATEGORY_TAX
     return word if word in categories else fallback
 
 
-def generate_hierarchical_foldername(text_inference, prompt, description, extra_unwanted_words, fallback):
-    """Generate a two-level folder path: a fixed broad category (e.g. 'science')
+def generate_hierarchical_foldername(text_inference, prompt, description, extra_unwanted_words, fallback, categories):
+    """Generate a two-level folder path: a broad category (e.g. 'science')
     over the free-form specific topic from generate_foldername (e.g. 'string_theory')."""
     specific = generate_foldername(text_inference, prompt, description, extra_unwanted_words, fallback)
-    broad = generate_broad_category(text_inference, description)
+    broad = generate_broad_category(text_inference, description, categories)
     return broad if specific == broad else f"{broad}/{specific}"
 
 
-def process_single_file(file_path, describe_and_name_fn, silent=False):
-    """Run `describe_and_name_fn(progress, task_id) -> (foldername, filename, description)`
-    under a progress bar, log the outcome, and return it as FileMetadata."""
-    start_time = time.time()
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TimeElapsedColumn(),
-        disable=silent,
-    ) as progress:
-        task_id = progress.add_task(f"Processing {os.path.basename(file_path)}", total=1.0)
-        foldername, filename, description = describe_and_name_fn(progress, task_id)
+CATEGORY_INDUCTION_PROMPT_TEMPLATE = """Here are short summaries of files found in a directory:
 
-    logger.info(
-        "Processed '%s' in %.2fs -> %s/%s",
-        file_path, time.time() - start_time, foldername, filename,
+{summaries}
+
+Propose between {min_categories} and {max_categories} broad, single-word, lowercase categories that
+together would make sense as top-level folders for organizing these files. Every file should
+reasonably fit under one of them. Prefer categories that reflect what is actually described above
+over generic ones that don't apply here.
+Output only a comma-separated list of the category words, nothing else.
+
+Categories:"""
+
+# Representative sample size for taxonomy induction: enough summaries to see the
+# shape of the directory's content without blowing out the prompt on large runs.
+CATEGORY_INDUCTION_SAMPLE_SIZE = 40
+
+
+def induce_category_taxonomy(
+    text_inference, descriptions,
+    min_categories=4, max_categories=12, fallback=CATEGORY_TAXONOMY,
+):
+    """Derive a small set of top-level bucket categories from the actual file
+    descriptions in this run, instead of always classifying into a fixed list."""
+    descriptions = [d for d in descriptions if d and d.strip()]
+    if not descriptions:
+        return fallback
+
+    sample = descriptions[:CATEGORY_INDUCTION_SAMPLE_SIZE]
+    prompt = CATEGORY_INDUCTION_PROMPT_TEMPLATE.format(
+        summaries='\n'.join(f"- {d}" for d in sample),
+        min_categories=min_categories,
+        max_categories=max_categories,
     )
-    logger.debug("Description for '%s': %s", file_path, description)
+    response = text_inference.create_completion(prompt)
+    raw = _strip_label(response['choices'][0]['text'].strip(), 'Categories')
 
-    return FileMetadata(file_path=file_path, foldername=foldername, filename=filename, description=description)
+    words = []
+    seen = set()
+    for match in re.finditer(r'[a-zA-Z]+', raw):
+        word = match.group(0).lower()
+        if word not in seen:
+            seen.add(word)
+            words.append(word)
+        if len(words) >= max_categories:
+            break
+
+    if len(words) < 2:
+        logger.warning("Could not induce a category taxonomy from file content; falling back to defaults")
+        return fallback
+
+    if 'other' not in words:
+        words.append('other')
+    return tuple(words)

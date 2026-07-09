@@ -1,7 +1,19 @@
 """Generate folder/file names for image files by describing them with a
-vision-language model, then naming them with a text model."""
+vision-language model, then naming them with a text model.
 
-from ai_metadata import generate_filename, generate_hierarchical_foldername, process_single_file
+Description and naming are separate passes (describe_image_files then
+name_image_files) so the caller can induce a content-derived category
+taxonomy from all descriptions -- image and text alike -- before any
+foldername is decided."""
+
+import time
+
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+
+from ai_metadata import FileMetadata, generate_filename, generate_hierarchical_foldername
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 IMAGE_UNWANTED_WORDS = {
     'image', 'picture', 'photo', 'jpg', 'png', 'jpeg', 'gif', 'bmp', 'svg', 'logo',
@@ -68,11 +80,28 @@ def _describe_image(image_path, image_inference):
     return _get_text_from_generator(generator).strip()
 
 
-def generate_image_metadata(image_path, image_inference, text_inference, progress, task_id):
-    """Generate (foldername, filename, description) for a single image."""
-    description = _describe_image(image_path, image_inference)
-    progress.update(task_id, advance=1 / 3)
+def describe_image_files(image_paths, image_inference, silent=False):
+    """Describe each image with the vision model, returning [(path, description), ...]."""
+    results = []
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        disable=silent,
+    ) as progress:
+        task_id = progress.add_task("Describing images", total=len(image_paths) or 1)
+        for image_path in image_paths:
+            start_time = time.time()
+            description = _describe_image(image_path, image_inference)
+            logger.info("Described '%s' in %.2fs", image_path, time.time() - start_time)
+            logger.debug("Description for '%s': %s", image_path, description)
+            results.append((image_path, description))
+            progress.update(task_id, advance=1)
+    return results
 
+
+def name_image_file(image_path, description, text_inference, categories):
+    """Generate (foldername, filename) for an already-described image."""
     filename = generate_filename(
         text_inference,
         FILENAME_PROMPT_TEMPLATE.format(description=description),
@@ -81,30 +110,30 @@ def generate_image_metadata(image_path, image_inference, text_inference, progres
         fallback_prefix='image',
         source_path=image_path,
     )
-    progress.update(task_id, advance=1 / 3)
-
     foldername = generate_hierarchical_foldername(
         text_inference,
         FOLDERNAME_PROMPT_TEMPLATE.format(description=description),
         description,
         IMAGE_UNWANTED_WORDS,
         fallback='images',
+        categories=categories,
     )
-    progress.update(task_id, advance=1 / 3)
-
-    return foldername, filename, description
+    return FileMetadata(file_path=image_path, foldername=foldername, filename=filename, description=description)
 
 
-def process_single_image(image_path, image_inference, text_inference, silent=False):
-    return process_single_file(
-        image_path,
-        lambda progress, task_id: generate_image_metadata(
-            image_path, image_inference, text_inference, progress, task_id
-        ),
-        silent=silent,
-    )
-
-
-def process_image_files(image_paths, image_inference, text_inference, silent=False):
-    """Process image files sequentially, returning a list of FileMetadata."""
-    return [process_single_image(p, image_inference, text_inference, silent=silent) for p in image_paths]
+def name_image_files(image_descriptions, text_inference, categories, silent=False):
+    """Name each described image, returning a list of FileMetadata."""
+    metadata = []
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        disable=silent,
+    ) as progress:
+        task_id = progress.add_task("Naming images", total=len(image_descriptions) or 1)
+        for image_path, description in image_descriptions:
+            file_metadata = name_image_file(image_path, description, text_inference, categories)
+            logger.info("Named '%s' -> %s/%s", image_path, file_metadata.foldername, file_metadata.filename)
+            metadata.append(file_metadata)
+            progress.update(task_id, advance=1)
+    return metadata

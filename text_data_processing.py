@@ -1,7 +1,19 @@
 """Generate folder/file names for text-based files by summarizing them with
-a text model, then naming them from that summary."""
+a text model, then naming them from that summary.
 
-from ai_metadata import generate_filename, generate_hierarchical_foldername, process_single_file
+Summarizing and naming are separate passes (describe_text_files then
+name_text_files) so the caller can induce a content-derived category
+taxonomy from all descriptions -- text and image alike -- before any
+foldername is decided."""
+
+import time
+
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+
+from ai_metadata import FileMetadata, generate_filename, generate_hierarchical_foldername
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 TEXT_UNWANTED_WORDS = {
     'document', 'key', 'information', 'note', 'notes', 'ideas', 'concepts',
@@ -64,11 +76,28 @@ def _summarize(text, text_inference):
     return response['choices'][0]['text'].strip()
 
 
-def generate_text_metadata(input_text, file_path, text_inference, progress, task_id):
-    """Generate (foldername, filename, description) for a single text document."""
-    description = _summarize(input_text, text_inference)
-    progress.update(task_id, advance=1 / 3)
+def describe_text_files(text_tuples, text_inference, silent=False):
+    """Summarize each (file_path, text) tuple, returning [(path, description), ...]."""
+    results = []
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        disable=silent,
+    ) as progress:
+        task_id = progress.add_task("Summarizing documents", total=len(text_tuples) or 1)
+        for file_path, text in text_tuples:
+            start_time = time.time()
+            description = _summarize(text, text_inference)
+            logger.info("Summarized '%s' in %.2fs", file_path, time.time() - start_time)
+            logger.debug("Description for '%s': %s", file_path, description)
+            results.append((file_path, description))
+            progress.update(task_id, advance=1)
+    return results
 
+
+def name_text_file(file_path, description, text_inference, categories):
+    """Generate (foldername, filename) for an already-summarized document."""
     filename = generate_filename(
         text_inference,
         FILENAME_PROMPT_TEMPLATE.format(description=description),
@@ -77,28 +106,30 @@ def generate_text_metadata(input_text, file_path, text_inference, progress, task
         fallback_prefix='document',
         source_path=file_path,
     )
-    progress.update(task_id, advance=1 / 3)
-
     foldername = generate_hierarchical_foldername(
         text_inference,
         FOLDERNAME_PROMPT_TEMPLATE.format(description=description),
         description,
         TEXT_UNWANTED_WORDS,
         fallback='documents',
+        categories=categories,
     )
-    progress.update(task_id, advance=1 / 3)
-
-    return foldername, filename, description
+    return FileMetadata(file_path=file_path, foldername=foldername, filename=filename, description=description)
 
 
-def process_single_text_file(file_path, text, text_inference, silent=False):
-    return process_single_file(
-        file_path,
-        lambda progress, task_id: generate_text_metadata(text, file_path, text_inference, progress, task_id),
-        silent=silent,
-    )
-
-
-def process_text_files(text_tuples, text_inference, silent=False):
-    """Process (file_path, text) tuples sequentially, returning a list of FileMetadata."""
-    return [process_single_text_file(fp, text, text_inference, silent=silent) for fp, text in text_tuples]
+def name_text_files(text_descriptions, text_inference, categories, silent=False):
+    """Name each summarized document, returning a list of FileMetadata."""
+    metadata = []
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        disable=silent,
+    ) as progress:
+        task_id = progress.add_task("Naming documents", total=len(text_descriptions) or 1)
+        for file_path, description in text_descriptions:
+            file_metadata = name_text_file(file_path, description, text_inference, categories)
+            logger.info("Named '%s' -> %s/%s", file_path, file_metadata.foldername, file_metadata.filename)
+            metadata.append(file_metadata)
+            progress.update(task_id, advance=1)
+    return metadata

@@ -27,12 +27,11 @@ TEXT_TYPE_SUBFOLDERS = {
 }
 
 
-# Fixed top-level buckets used to classify each file's broad subject area.
-# The AI-generated foldername (e.g. "string_theory") is nested under one of
-# these (e.g. "science/string_theory") instead of standing alone, so content
-# mode still yields clean, browsable top-level folders. Also used to bucket
-# already-organized folders (e.g. books) that skip per-file AI classification
-# but still get placed under a broad category — see split_by_folder_trust.
+# Fallback top-level buckets, used only when a run has no file descriptions
+# to induce categories from (e.g. an empty directory) or the induction step
+# itself fails. Normal runs derive their bucket set from the actual content
+# being organized -- see ai_metadata.induce_category_taxonomy -- rather than
+# always forcing files into this fixed list.
 CATEGORY_TAXONOMY = (
     'technology', 'science', 'finance', 'business', 'art', 'nature',
     'health', 'education', 'literature', 'entertainment', 'legal',
