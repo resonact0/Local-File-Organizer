@@ -70,37 +70,10 @@ def process_files_by_type(file_paths, output_path):
     return operations
 
 
-def compute_operations(metadata_list, output_path, renamed_files, processed_files):
-    """Plan copy operations from AI-generated FileMetadata, avoiding name collisions."""
-    operations = []
-    for metadata in metadata_list:
-        if metadata.file_path in processed_files:
-            continue
-        processed_files.add(metadata.file_path)
-
-        ext = os.path.splitext(metadata.file_path)[1]
-        dir_path = os.path.join(output_path, metadata.foldername)
-
-        new_file_name = metadata.filename + ext
-        new_file_path = os.path.join(dir_path, new_file_name)
-        counter = 1
-        while new_file_path in renamed_files:
-            new_file_name = f"{metadata.filename}_{counter}{ext}"
-            new_file_path = os.path.join(dir_path, new_file_name)
-            counter += 1
-        renamed_files.add(new_file_path)
-
-        operations.append({
-            'source': metadata.file_path,
-            'destination': new_file_path,
-            'folder_name': metadata.foldername,
-            'new_file_name': new_file_name,
-        })
-    return operations
-
-
-def execute_operations(operations, dry_run=False, silent=False):
-    """Carry out planned copy operations, reporting progress."""
+def execute_operations(operations, dry_run=False, silent=False, move=False):
+    """Carry out planned operations (copy by default, move if requested),
+    reporting progress."""
+    verb = 'move' if move else 'copy'
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -114,13 +87,34 @@ def execute_operations(operations, dry_run=False, silent=False):
             destination = operation['destination']
 
             if dry_run:
-                logger.info("Dry run: would copy '%s' to '%s'", source, destination)
+                logger.info("Dry run: would %s '%s' to '%s'", verb, source, destination)
+            elif move and os.path.abspath(source) == os.path.abspath(destination):
+                logger.info("Skipping '%s': already at its destination", source)
             else:
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 try:
-                    shutil.copy2(source, destination)
-                    logger.info("Copied '%s' to '%s'", source, destination)
+                    if move:
+                        shutil.move(source, destination)
+                        logger.info("Moved '%s' to '%s'", source, destination)
+                    else:
+                        shutil.copy2(source, destination)
+                        logger.info("Copied '%s' to '%s'", source, destination)
                 except OSError as exc:
-                    logger.error("Failed to copy '%s' to '%s': %s", source, destination, exc)
+                    logger.error("Failed to %s '%s' to '%s': %s", verb, source, destination, exc)
 
             progress.advance(task)
+
+
+def remove_empty_dirs(base_path):
+    """Remove directories left empty (e.g. after a move run), bottom-up,
+    never removing `base_path` itself."""
+    for root, _, _ in os.walk(base_path, topdown=False):
+        # Check the live listing, not the walk snapshot: children removed in
+        # earlier (deeper) iterations must let their parent qualify too.
+        if root == os.path.normpath(base_path) or os.listdir(root):
+            continue
+        try:
+            os.rmdir(root)
+            logger.info("Removed empty directory: %s", root)
+        except OSError as exc:
+            logger.debug("Could not remove directory %s: %s", root, exc)

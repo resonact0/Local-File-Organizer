@@ -37,9 +37,14 @@ class OllamaTextInference:
         self.model = model
         self.client = ollama.Client(host=host)
 
-    def create_completion(self, prompt):
+    def create_completion(self, prompt, max_tokens=None):
+        # Temperature 0 keeps taxonomy induction and category assignment
+        # deterministic, so identical inputs organize identically across runs.
+        options = {'temperature': 0}
+        if max_tokens:
+            options['num_predict'] = max_tokens
         response = _call(self.model, lambda: self.client.generate(
-            model=self.model, prompt=prompt, stream=False
+            model=self.model, prompt=prompt, stream=False, options=options
         ))
         return {'choices': [{'text': response['response']}]}
 

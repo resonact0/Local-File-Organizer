@@ -18,6 +18,20 @@ def get_yes_no(prompt):
         print("Please enter 'yes' or 'no'. To exit, type '/exit'.")
 
 
+def get_transfer_mode():
+    """Ask whether to copy or move the files; empty input defaults to copy."""
+    while True:
+        response = input("Copy files or move them? (copy/move) [copy]: ").strip().lower()
+        if response in ('', 'copy', 'c'):
+            return 'copy'
+        if response in ('move', 'm'):
+            return 'move'
+        if response == '/exit':
+            print("Exiting program.")
+            raise SystemExit(0)
+        print("Please enter 'copy' or 'move'. To exit, type '/exit'.")
+
+
 def get_mode_selection():
     """Prompt the user to choose an organizing mode: content, date, or type."""
     modes = {'1': 'content', '2': 'date', '3': 'type'}

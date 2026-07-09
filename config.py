@@ -30,8 +30,8 @@ TEXT_TYPE_SUBFOLDERS = {
 # Fallback top-level buckets, used only when a run has no file descriptions
 # to induce categories from (e.g. an empty directory) or the induction step
 # itself fails. Normal runs derive their bucket set from the actual content
-# being organized -- see ai_metadata.induce_category_taxonomy -- rather than
-# always forcing files into this fixed list.
+# being organized -- see taxonomy.induce_taxonomy -- rather than always
+# forcing files into this fixed list.
 CATEGORY_TAXONOMY = (
     'technology', 'science', 'finance', 'business', 'art', 'nature',
     'health', 'education', 'literature', 'entertainment', 'legal',

@@ -3,6 +3,8 @@ rendering directory trees."""
 
 import os
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 
 import docx
 import fitz  # PyMuPDF
@@ -11,6 +13,7 @@ from pptx import Presentation
 
 from config import IMAGE_EXTENSIONS, TEXT_EXTENSIONS
 from logging_setup import get_logger
+from manifest import MANIFEST_NAME
 
 logger = get_logger(__name__)
 
@@ -90,6 +93,38 @@ def read_file_data(file_path):
     return reader(file_path) if reader else None
 
 
+_CONTAINER_NS = {'c': 'urn:oasis:names:tc:opendocument:xmlns:container'}
+_DC_NS = {'dc': 'http://purl.org/dc/elements/1.1/'}
+
+
+def read_epub_metadata(file_path):
+    """Extract {'title', 'creator', 'subjects'} from an epub's OPF metadata
+    using only the stdlib (an epub is a zip with a Dublin Core manifest), or
+    None if the file isn't a well-formed epub. Mobi/azw have no such cheap
+    parse and are handled by filename alone."""
+    try:
+        with zipfile.ZipFile(file_path) as zf:
+            container = ET.fromstring(zf.read('META-INF/container.xml'))
+            rootfile = container.find('.//c:rootfile', _CONTAINER_NS)
+            opf = ET.fromstring(zf.read(rootfile.get('full-path')))
+
+        def text(tag):
+            el = opf.find(f'.//dc:{tag}', _DC_NS)
+            return el.text.strip() if el is not None and el.text else None
+
+        return {
+            'title': text('title'),
+            'creator': text('creator'),
+            'subjects': [
+                el.text.strip() for el in opf.findall('.//dc:subject', _DC_NS)
+                if el.text and el.text.strip()
+            ],
+        }
+    except Exception as exc:
+        logger.debug("Could not read epub metadata from %s: %s", file_path, exc)
+        return None
+
+
 def display_directory_tree(path):
     """Print a directory tree similar to the `tree` command, prefixed by the full path."""
     def tree(dir_path, prefix=''):
@@ -109,12 +144,25 @@ def display_directory_tree(path):
 
 def collect_file_paths(base_path):
     """Collect all file paths under `base_path` (or itself, if it's a file),
-    excluding hidden files."""
+    excluding hidden files. Subtrees containing a manifest marker -- outputs
+    of a previous run of this tool -- are skipped entirely, so an organized
+    tree sitting inside the input never gets re-organized (which would feed
+    generated category folders back into classification)."""
     if os.path.isfile(base_path):
         return [base_path]
 
     file_paths = []
-    for root, _, files in os.walk(base_path):
+    for root, dirs, files in os.walk(base_path):
+        if MANIFEST_NAME in files:
+            if root == os.path.normpath(base_path) or os.path.samefile(root, base_path):
+                logger.warning(
+                    "Input directory %s is itself a previous output of this tool; "
+                    "re-organizing it anyway since it was chosen explicitly", base_path,
+                )
+            else:
+                logger.warning("Skipping previously organized subtree: %s", root)
+                dirs[:] = []
+                continue
         file_paths.extend(os.path.join(root, name) for name in files if not name.startswith('.'))
     return file_paths
 
