@@ -36,6 +36,40 @@ if command -v ionice &> /dev/null; then
     NICE_CPU=(ionice -c2 -n7 "${NICE_CPU[@]}")
 fi
 
+# --- Hard CPU/RAM ceiling ----------------------------------------------
+# nice/ionice only *deprioritize* the AI processes; under sustained load they
+# can still saturate every core and make the whole desktop unresponsive for
+# minutes (this has happened before). Where available, additionally run them
+# in a systemd user scope with a real cgroup cap, so the machine stays
+# responsive and, worst case, only the AI processes get OOM-killed instead of
+# the whole system hanging. Override the defaults with ORGANIZER_CPU_QUOTA /
+# ORGANIZER_MEM_MAX / ORGANIZER_MEM_HIGH if you want to tune them.
+CPU_CORES=$(nproc 2>/dev/null || echo 4)
+QUOTA_CORES=$(( CPU_CORES - 2 ))
+[ "$QUOTA_CORES" -ge 1 ] || QUOTA_CORES=1
+DEFAULT_CPU_QUOTA="$(( QUOTA_CORES * 100 ))%"
+
+TOTAL_MEM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
+DEFAULT_MEM_MAX_MB=$(( ${TOTAL_MEM_MB:-10240} * 60 / 100 ))
+DEFAULT_MEM_HIGH_MB=$(( ${TOTAL_MEM_MB:-10240} * 45 / 100 ))
+[ "$DEFAULT_MEM_MAX_MB" -ge 3072 ] || DEFAULT_MEM_MAX_MB=3072
+[ "$DEFAULT_MEM_HIGH_MB" -ge 2048 ] || DEFAULT_MEM_HIGH_MB=2048
+
+CPU_QUOTA="${ORGANIZER_CPU_QUOTA:-$DEFAULT_CPU_QUOTA}"
+MEM_MAX="${ORGANIZER_MEM_MAX:-${DEFAULT_MEM_MAX_MB}M}"
+MEM_HIGH="${ORGANIZER_MEM_HIGH:-${DEFAULT_MEM_HIGH_MB}M}"
+SCOPE_PROPS=(-p CPUQuota="$CPU_QUOTA" -p MemoryMax="$MEM_MAX" -p MemoryHigh="$MEM_HIGH")
+
+SCOPE_WRAP=()
+if command -v systemd-run &> /dev/null && \
+   systemd-run --user --scope --quiet "${SCOPE_PROPS[@]}" -- /bin/true &> /dev/null; then
+    SCOPE_WRAP=(systemd-run --user --scope --quiet "${SCOPE_PROPS[@]}" --)
+    echo "Capping AI processes to CPUQuota=$CPU_QUOTA MemoryMax=$MEM_MAX (MemoryHigh=$MEM_HIGH)."
+else
+    echo "Note: no systemd user scope available (falling back to nice/ionice only;" \
+         "a sustained heavy run can still make the desktop sluggish)."
+fi
+
 # Warn (and let the user bail) if there isn't enough free memory to safely
 # load the models — avoids triggering the OOM killer / a system freeze.
 MIN_FREE_MB=2048
@@ -70,46 +104,83 @@ echo "Checking Python dependencies..."
 pip install -q -r requirements.txt
 
 # --- Ollama ------------------------------------------------------------
-# Prefer a local `ollama` CLI; fall back to a running "ollama" Docker
-# container (e.g. `docker run -d --name ollama -p 11434:11434 ollama/ollama`).
+# Prefer a local `ollama` CLI. If that's not installed, fall back to Docker:
+# reuse an already-running "ollama" container, start a stopped one, or
+# create a brand new one if none exists yet.
+OLLAMA_DOCKER_CONTAINER="ollama"
 OLLAMA_CLI=()
-if command -v ollama &> /dev/null; then
-    OLLAMA_CLI=(ollama)
-elif command -v docker &> /dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx ollama; then
-    OLLAMA_CLI=(docker exec ollama ollama)
-fi
 
-OLLAMA_STARTED_BY_SCRIPT=false
+OLLAMA_STARTED_BY_SCRIPT=false   # we started a native `ollama serve` process
 OLLAMA_PID=""
+DOCKER_STARTED_BY_SCRIPT=false   # we started/created the docker container
 
-stop_ollama_if_we_started_it() {
+cleanup_ollama() {
     if [ "$OLLAMA_STARTED_BY_SCRIPT" = true ] && [ -n "$OLLAMA_PID" ]; then
         echo "Stopping Ollama server (started by this script)..."
         kill "$OLLAMA_PID" 2>/dev/null || true
         wait "$OLLAMA_PID" 2>/dev/null || true
     fi
+    if [ "$DOCKER_STARTED_BY_SCRIPT" = true ]; then
+        echo "Stopping Ollama Docker container (started by this script)..."
+        docker stop "$OLLAMA_DOCKER_CONTAINER" &> /dev/null || true
+    fi
 }
-trap stop_ollama_if_we_started_it EXIT
+trap cleanup_ollama EXIT
 
 if curl -s -o /dev/null http://localhost:11434/api/version; then
     echo "Ollama server already running, reusing it."
-elif [ ${#OLLAMA_CLI[@]} -eq 0 ]; then
-    echo "Error: Ollama is not installed and no server is reachable at localhost:11434."
-    echo "Install it from https://ollama.com, run it via Docker (--name ollama), and try again."
-    exit 1
-else
+    if command -v ollama &> /dev/null; then
+        OLLAMA_CLI=(ollama)
+    elif command -v docker &> /dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$OLLAMA_DOCKER_CONTAINER"; then
+        OLLAMA_CLI=(docker exec "$OLLAMA_DOCKER_CONTAINER" ollama)
+    fi
+elif command -v ollama &> /dev/null; then
+    OLLAMA_CLI=(ollama)
     echo "Starting Ollama server..."
     # Cap concurrency so at most one model is resident and one request runs
     # at a time — this bounds RAM/VRAM/CPU usage instead of letting Ollama
     # load both models and serve requests in parallel.
     nohup env OLLAMA_MAX_LOADED_MODELS=1 OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_QUEUE=1 \
-        "${NICE_CPU[@]}" "${OLLAMA_CLI[@]}" serve > /tmp/ollama-serve.log 2>&1 &
+        "${SCOPE_WRAP[@]}" "${NICE_CPU[@]}" "${OLLAMA_CLI[@]}" serve > /tmp/ollama-serve.log 2>&1 &
     OLLAMA_PID=$!
     OLLAMA_STARTED_BY_SCRIPT=true
     for _ in $(seq 1 15); do
         curl -s -o /dev/null http://localhost:11434/api/version && break
         sleep 1
     done
+elif command -v docker &> /dev/null; then
+    OLLAMA_CLI=(docker exec "$OLLAMA_DOCKER_CONTAINER" ollama)
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$OLLAMA_DOCKER_CONTAINER"; then
+        echo "Starting existing Ollama Docker container..."
+        docker start "$OLLAMA_DOCKER_CONTAINER" > /dev/null
+    else
+        echo "Creating and starting Ollama Docker container..."
+        DOCKER_GPU_FLAGS=()
+        if command -v nvidia-smi &> /dev/null; then
+            DOCKER_GPU_FLAGS=(--gpus=all)
+        fi
+        docker run -d --name "$OLLAMA_DOCKER_CONTAINER" \
+            -p 11434:11434 \
+            -v ollama:/root/.ollama \
+            --cpus="$QUOTA_CORES" \
+            --memory="$MEM_MAX" \
+            "${DOCKER_GPU_FLAGS[@]}" \
+            ollama/ollama > /dev/null
+    fi
+    DOCKER_STARTED_BY_SCRIPT=true
+    for _ in $(seq 1 15); do
+        curl -s -o /dev/null http://localhost:11434/api/version && break
+        sleep 1
+    done
+else
+    echo "Error: Ollama is not installed, Docker is not available, and no server is reachable at localhost:11434."
+    echo "Install Ollama from https://ollama.com, or install Docker, and try again."
+    exit 1
+fi
+
+if ! curl -s -o /dev/null http://localhost:11434/api/version; then
+    echo "Error: Ollama server did not become reachable at localhost:11434."
+    exit 1
 fi
 
 for model in llama3.2:3b llava:7b; do
@@ -124,4 +195,4 @@ for model in llama3.2:3b llava:7b; do
 done
 
 # --- Run -------------------------------------------------------------------
-"${NICE_CPU[@]}" python main.py "$INPUT_DIR" "$OUTPUT_DIR"
+"${SCOPE_WRAP[@]}" "${NICE_CPU[@]}" python main.py "$INPUT_DIR" "$OUTPUT_DIR"
