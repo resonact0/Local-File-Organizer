@@ -2,6 +2,7 @@
 rendering directory trees."""
 
 import os
+import re
 
 import docx
 import fitz  # PyMuPDF
@@ -128,3 +129,62 @@ def separate_files_by_type(file_paths):
         elif ext in TEXT_EXTENSIONS:
             text_files.append(fp)
     return image_files, text_files
+
+
+# Generic/auto-generated folder names that carry no real information about
+# their contents (OS defaults, camera/app dumps, bare dates or numbers), so a
+# folder with one of these names should NOT be trusted as a meaningful label.
+_JUNK_FOLDER_NAMES = {
+    'new folder', 'untitled folder', 'untitled', 'temp', 'tmp', 'desktop',
+    'downloads', 'download', 'documents', 'my documents', 'pictures', 'my pictures',
+    'screenshots', 'screenshot', 'misc', 'miscellaneous', 'stuff', 'dcim',
+    'camera uploads', 'photos', 'files', 'backup', 'old', 'others', 'other',
+    'unsorted', 'unnamed', 'inbox', 'attachments', 'exports', 'export',
+}
+
+_JUNK_FOLDER_PATTERNS = [re.compile(p) for p in (
+    r'^new folder(\s*\(\d+\))?$',
+    r'^untitled(\s*folder)?\s*\d*$',
+    r'^copy of .*$',
+    r'^img[-_ ]?\d+$',                # IMG_1234, IMG-1234
+    r'^dcim\d*$',
+    r'^\d{3,4}[a-z]+$',                # 100ANDRO, 101APPLE style camera dirs
+    r'^screenshots?([-_ ]?\d+)?$',
+    r'^\d{4}[-_]\d{2}[-_]\d{2}$',       # date-stamped, e.g. 2024-01-15
+    r'^\d{8}$',                        # 20240115
+    r'^\(?\d+\)?$',                    # purely numeric, e.g. "1", "(2)"
+)]
+
+
+def is_junk_folder_name(name):
+    """Return True if `name` looks like a generic/auto-generated folder name
+    rather than a meaningful, user-chosen label (e.g. "Downloads", "IMG_1234",
+    "New Folder (2)") that shouldn't be trusted to describe its contents."""
+    normalized = name.strip().lower()
+    if normalized in _JUNK_FOLDER_NAMES:
+        return True
+    return any(pattern.match(normalized) for pattern in _JUNK_FOLDER_PATTERNS)
+
+
+def split_by_folder_trust(file_paths, base_path):
+    """Split files into (trusted, untrusted) based on whether the folder(s)
+    they already sit in look like meaningful, user-chosen labels.
+
+    A file is "trusted" (its existing location is kept as-is, skipping AI
+    classification) only if it sits inside at least one subfolder of
+    `base_path` and none of the folder names between `base_path` and the file
+    look like junk. Files sitting directly in `base_path`, or under any junk
+    folder name, are "untrusted" and go through the normal content pipeline.
+    """
+    trusted, untrusted = [], []
+    for fp in file_paths:
+        rel_dir = os.path.relpath(os.path.dirname(fp), base_path)
+        if rel_dir == '.':
+            untrusted.append(fp)
+            continue
+        components = rel_dir.split(os.sep)
+        if any(is_junk_folder_name(c) for c in components):
+            untrusted.append(fp)
+        else:
+            trusted.append(fp)
+    return trusted, untrusted

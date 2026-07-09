@@ -13,7 +13,13 @@ from data_processing_common import (
     process_files_by_date,
     process_files_by_type,
 )
-from file_utils import collect_file_paths, display_directory_tree, read_file_data, separate_files_by_type
+from file_utils import (
+    collect_file_paths,
+    display_directory_tree,
+    read_file_data,
+    separate_files_by_type,
+    split_by_folder_trust,
+)
 from image_data_processing import process_image_files
 from logging_setup import configure_logging, get_logger
 from models import load_models
@@ -29,9 +35,38 @@ def ensure_nltk_data():
         nltk.download(resource, quiet=True)
 
 
-def organize_by_content(file_paths, output_path, models, silent):
-    """Plan operations for 'by content' mode using AI-generated metadata."""
-    image_files, text_files = separate_files_by_type(file_paths)
+def _mirror_operations(trusted_files, input_path, output_path):
+    """Build operations that keep already-well-organized files exactly where
+    their existing folder structure puts them, relative to output_path."""
+    operations = []
+    for fp in trusted_files:
+        rel_path = os.path.relpath(fp, input_path)
+        operations.append({
+            'source': fp,
+            'destination': os.path.join(output_path, rel_path),
+            'link_type': 'hardlink',
+        })
+    return operations
+
+
+def organize_by_content(file_paths, input_path, output_path, models, silent):
+    """Plan operations for 'by content' mode using AI-generated metadata.
+
+    Files that already sit inside a meaningfully-named subfolder (e.g.
+    `author/book_title/book_title.pdf` + its cover image) are mirrored as-is
+    instead of being reclassified, since splitting them apart by file type
+    would break up an already-organized unit. Only files with no such
+    context (loose in the input root, or under a generic/junk folder name
+    like "Downloads" or "IMG_1234") go through AI classification.
+    """
+    if os.path.isdir(input_path):
+        trusted_files, untrusted_files = split_by_folder_trust(file_paths, input_path)
+    else:
+        trusted_files, untrusted_files = [], file_paths
+    if trusted_files:
+        logger.info("Keeping %d file(s) as-is (already organized in named folders)", len(trusted_files))
+
+    image_files, text_files = separate_files_by_type(untrusted_files)
 
     text_tuples = []
     for fp in text_files:
@@ -44,7 +79,9 @@ def organize_by_content(file_paths, output_path, models, silent):
     image_metadata = process_image_files(image_files, models.image_inference, models.text_inference, silent=silent)
     text_metadata = process_text_files(text_tuples, models.text_inference, silent=silent)
 
-    return compute_operations(image_metadata + text_metadata, output_path, renamed_files=set(), processed_files=set())
+    operations = _mirror_operations(trusted_files, input_path, output_path)
+    operations += compute_operations(image_metadata + text_metadata, output_path, renamed_files=set(), processed_files=set())
+    return operations
 
 
 MODE_HANDLERS = {
@@ -53,12 +90,12 @@ MODE_HANDLERS = {
 }
 
 
-def plan_operations(mode, file_paths, output_path, models_holder, silent):
+def plan_operations(mode, file_paths, input_path, output_path, models_holder, silent):
     """Compute the operations for the selected mode, lazily loading models for 'content' mode."""
     if mode == 'content':
         if models_holder['models'] is None:
             models_holder['models'] = load_models(ModelConfig())
-        return organize_by_content(file_paths, output_path, models_holder['models'], silent)
+        return organize_by_content(file_paths, input_path, output_path, models_holder['models'], silent)
     return MODE_HANDLERS[mode](file_paths, output_path)
 
 
@@ -75,7 +112,7 @@ def organize_directory(input_path, output_path, silent):
     models_holder = {'models': None}
     while True:
         mode = cli.get_mode_selection()
-        operations = plan_operations(mode, file_paths, output_path, models_holder, silent)
+        operations = plan_operations(mode, file_paths, input_path, output_path, models_holder, silent)
 
         logger.info("Proposed directory structure:")
         if not silent:
