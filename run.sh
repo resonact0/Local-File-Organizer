@@ -194,5 +194,33 @@ for model in qwen2.5:7b-instruct llava:7b; do
     fi
 done
 
+# --- Nextcloud rescan --------------------------------------------------
+# Files under a Nextcloud data directory are indexed in Nextcloud's database;
+# edits made directly on disk (like this organizer's copies/moves) stay
+# invisible in the Nextcloud UI until `occ files:scan` refreshes the index.
+# After a run, rescan any organized path that lives inside the data root.
+NEXTCLOUD_CONTAINER="${NEXTCLOUD_CONTAINER:-nextcloud_app}"
+NEXTCLOUD_DATA_ROOT="${NEXTCLOUD_DATA_ROOT:-/mnt/data1tb/nextcloud/data}"
+
+nextcloud_scan() {
+    local path abs rel
+    command -v docker &> /dev/null || return 0
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$NEXTCLOUD_CONTAINER" || return 0
+    for path in "$@"; do
+        [ -n "$path" ] && [ -e "$path" ] || continue
+        abs=$(readlink -f "$path")
+        case "$abs" in
+            "$NEXTCLOUD_DATA_ROOT"/*)
+                rel="${abs#"$NEXTCLOUD_DATA_ROOT"}"
+                echo "Rescanning $rel in Nextcloud..."
+                docker exec -u www-data "$NEXTCLOUD_CONTAINER" php occ files:scan --path="$rel" || \
+                    echo "Warning: Nextcloud rescan failed for $rel (run it manually)."
+                ;;
+        esac
+    done
+}
+
 # --- Run -------------------------------------------------------------------
 "${SCOPE_WRAP[@]}" "${NICE_CPU[@]}" python main.py "$INPUT_DIR" "$OUTPUT_DIR"
+
+nextcloud_scan "$INPUT_DIR" "$OUTPUT_DIR"
