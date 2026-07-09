@@ -6,6 +6,7 @@ import sys
 import time
 
 import cli
+from ai_metadata import generate_broad_category
 from config import LOG_DIR, ModelConfig
 from data_processing_common import (
     compute_operations,
@@ -35,17 +36,41 @@ def ensure_nltk_data():
         nltk.download(resource, quiet=True)
 
 
-def _mirror_operations(trusted_files, input_path, output_path):
-    """Build operations that keep already-well-organized files exactly where
-    their existing folder structure puts them, relative to output_path."""
-    operations = []
+def _group_by_top_folder(trusted_files, input_path):
+    """Group trusted files by the first path component under input_path (e.g.
+    the author folder in `author/book_title/book_title.pdf`), so every file
+    under one top-level folder shares a single broad-category decision."""
+    groups = {}
     for fp in trusted_files:
         rel_path = os.path.relpath(fp, input_path)
-        operations.append({
-            'source': fp,
-            'destination': os.path.join(output_path, rel_path),
-            'link_type': 'hardlink',
+        top_dir = rel_path.split(os.sep)[0]
+        groups.setdefault(top_dir, []).append(fp)
+    return groups
+
+
+def _mirror_operations(trusted_files, input_path, output_path, text_inference):
+    """Build operations that keep already-well-organized files exactly where
+    their existing folder structure puts them, nested under one broad-category
+    bucket (config.CATEGORY_TAXONOMY) per top-level folder. Only the folder
+    names themselves are used to pick the bucket -- no per-file AI reads."""
+    operations = []
+    for top_dir, files in _group_by_top_folder(trusted_files, input_path).items():
+        folder_names = sorted({
+            part
+            for fp in files
+            for part in os.path.relpath(fp, input_path).split(os.sep)[:-1]
         })
+        description = ' '.join(name.replace('_', ' ').replace('-', ' ') for name in folder_names)
+        category = generate_broad_category(text_inference, description)
+        logger.info("Bucketing folder '%s' (%d files) under category '%s'", top_dir, len(files), category)
+
+        for fp in files:
+            rel_path = os.path.relpath(fp, input_path)
+            operations.append({
+                'source': fp,
+                'destination': os.path.join(output_path, category, rel_path),
+                'link_type': 'hardlink',
+            })
     return operations
 
 
@@ -79,7 +104,7 @@ def organize_by_content(file_paths, input_path, output_path, models, silent):
     image_metadata = process_image_files(image_files, models.image_inference, models.text_inference, silent=silent)
     text_metadata = process_text_files(text_tuples, models.text_inference, silent=silent)
 
-    operations = _mirror_operations(trusted_files, input_path, output_path)
+    operations = _mirror_operations(trusted_files, input_path, output_path, models.text_inference)
     operations += compute_operations(image_metadata + text_metadata, output_path, renamed_files=set(), processed_files=set())
     return operations
 
