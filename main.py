@@ -74,8 +74,28 @@ def _mirror_operations(trusted_files, input_path, output_path, text_inference):
             operations.append({
                 'source': fp,
                 'destination': os.path.join(output_path, category, rel_path),
-                'link_type': 'hardlink',
             })
+    return operations
+
+
+def _other_operations(other_files, output_path):
+    """Build operations for files whose extension content mode can't read or
+    classify (e.g. archives, ebooks). Filed as-is under an 'other' bucket,
+    keeping their original filename, instead of being silently dropped."""
+    operations = []
+    used_destinations = set()
+    for fp in other_files:
+        logger.warning("Unsupported file type for content classification, filing under 'other': %s", fp)
+
+        base, ext = os.path.splitext(os.path.basename(fp))
+        destination = os.path.join(output_path, 'other', base + ext)
+        counter = 1
+        while destination in used_destinations:
+            destination = os.path.join(output_path, 'other', f"{base}_{counter}{ext}")
+            counter += 1
+        used_destinations.add(destination)
+
+        operations.append({'source': fp, 'destination': destination})
     return operations
 
 
@@ -96,7 +116,7 @@ def organize_by_content(file_paths, input_path, output_path, models, silent):
     if trusted_files:
         logger.info("Keeping %d file(s) as-is (already organized in named folders)", len(trusted_files))
 
-    image_files, text_files = separate_files_by_type(untrusted_files)
+    image_files, text_files, other_files = separate_files_by_type(untrusted_files)
 
     text_tuples = []
     for fp in text_files:
@@ -111,6 +131,7 @@ def organize_by_content(file_paths, input_path, output_path, models, silent):
 
     operations = _mirror_operations(trusted_files, input_path, output_path, models.text_inference)
     operations += compute_operations(image_metadata + text_metadata, output_path, renamed_files=set(), processed_files=set())
+    operations += _other_operations(other_files, output_path)
     return operations
 
 

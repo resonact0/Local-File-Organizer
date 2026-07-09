@@ -1,9 +1,10 @@
 """File-operation planning and execution: turn file metadata into concrete
-copy/link operations, and carry them out on disk."""
+copy operations, and carry them out on disk."""
 
 import datetime
 import os
 import re
+import shutil
 
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
@@ -36,7 +37,6 @@ def _build_operation(file_path, dir_path, file_name):
     return {
         'source': file_path,
         'destination': os.path.join(dir_path, file_name),
-        'link_type': 'hardlink',
     }
 
 
@@ -71,7 +71,7 @@ def process_files_by_type(file_paths, output_path):
 
 
 def compute_operations(metadata_list, output_path, renamed_files, processed_files):
-    """Plan copy/link operations from AI-generated FileMetadata, avoiding name collisions."""
+    """Plan copy operations from AI-generated FileMetadata, avoiding name collisions."""
     operations = []
     for metadata in metadata_list:
         if metadata.file_path in processed_files:
@@ -93,7 +93,6 @@ def compute_operations(metadata_list, output_path, renamed_files, processed_file
         operations.append({
             'source': metadata.file_path,
             'destination': new_file_path,
-            'link_type': 'hardlink',
             'folder_name': metadata.foldername,
             'new_file_name': new_file_name,
         })
@@ -101,7 +100,7 @@ def compute_operations(metadata_list, output_path, renamed_files, processed_file
 
 
 def execute_operations(operations, dry_run=False, silent=False):
-    """Carry out planned file operations (hardlink/symlink), reporting progress."""
+    """Carry out planned copy operations, reporting progress."""
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -113,19 +112,15 @@ def execute_operations(operations, dry_run=False, silent=False):
         for operation in operations:
             source = operation['source']
             destination = operation['destination']
-            link_type = operation['link_type']
 
             if dry_run:
-                logger.info("Dry run: would create %s from '%s' to '%s'", link_type, source, destination)
+                logger.info("Dry run: would copy '%s' to '%s'", source, destination)
             else:
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 try:
-                    if link_type == 'hardlink':
-                        os.link(source, destination)
-                    else:
-                        os.symlink(source, destination)
-                    logger.info("Created %s from '%s' to '%s'", link_type, source, destination)
+                    shutil.copy2(source, destination)
+                    logger.info("Copied '%s' to '%s'", source, destination)
                 except OSError as exc:
-                    logger.error("Failed to create %s from '%s' to '%s': %s", link_type, source, destination, exc)
+                    logger.error("Failed to copy '%s' to '%s': %s", source, destination, exc)
 
             progress.advance(task)

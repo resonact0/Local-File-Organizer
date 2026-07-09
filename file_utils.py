@@ -120,15 +120,19 @@ def collect_file_paths(base_path):
 
 
 def separate_files_by_type(file_paths):
-    """Split file paths into (image_files, text_files) based on extension."""
-    image_files, text_files = [], []
+    """Split file paths into (image_files, text_files, other_files) based on
+    extension. `other_files` holds extensions content mode can't read (e.g.
+    archives, ebooks) -- the caller is responsible for not dropping them."""
+    image_files, text_files, other_files = [], [], []
     for fp in file_paths:
         ext = os.path.splitext(fp.lower())[1]
         if ext in IMAGE_EXTENSIONS:
             image_files.append(fp)
         elif ext in TEXT_EXTENSIONS:
             text_files.append(fp)
-    return image_files, text_files
+        else:
+            other_files.append(fp)
+    return image_files, text_files, other_files
 
 
 # Generic/auto-generated folder names that carry no real information about
