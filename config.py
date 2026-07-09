@@ -27,11 +27,21 @@ TEXT_TYPE_SUBFOLDERS = {
 }
 
 
+# Fixed top-level buckets used to classify each file's broad subject area.
+# The AI-generated foldername (e.g. "string_theory") is nested under one of
+# these (e.g. "science/string_theory") instead of standing alone, so content
+# mode still yields clean, browsable top-level folders.
+CATEGORY_TAXONOMY = (
+    'technology', 'science', 'finance', 'art', 'nature',
+    'personal', 'business', 'travel', 'documents', 'other',
+)
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     """Ollama models used for content understanding."""
     vision_model: str = "llava:7b"
-    text_model: str = "llama3.2:3b"
+    text_model: str = "qwen2.5:7b-instruct"
     host: str = "http://localhost:11434"
 
 

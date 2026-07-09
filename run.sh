@@ -183,7 +183,7 @@ if ! curl -s -o /dev/null http://localhost:11434/api/version; then
     exit 1
 fi
 
-for model in llama3.2:3b llava:7b; do
+for model in qwen2.5:7b-instruct llava:7b; do
     if [ ${#OLLAMA_CLI[@]} -gt 0 ]; then
         if ! "${OLLAMA_CLI[@]}" list | awk '{print $1}' | grep -qx "$model"; then
             echo "Pulling model $model (first run only)..."

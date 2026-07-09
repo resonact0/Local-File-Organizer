@@ -1,7 +1,7 @@
 """Generate folder/file names for text-based files by summarizing them with
 a text model, then naming them from that summary."""
 
-from ai_metadata import generate_filename, generate_foldername, process_single_file
+from ai_metadata import generate_filename, generate_hierarchical_foldername, process_single_file
 
 TEXT_UNWANTED_WORDS = {
     'document', 'key', 'information', 'note', 'notes', 'ideas', 'concepts',
@@ -79,7 +79,7 @@ def generate_text_metadata(input_text, file_path, text_inference, progress, task
     )
     progress.update(task_id, advance=1 / 3)
 
-    foldername = generate_foldername(
+    foldername = generate_hierarchical_foldername(
         text_inference,
         FOLDERNAME_PROMPT_TEMPLATE.format(description=description),
         description,

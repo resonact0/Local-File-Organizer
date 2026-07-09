@@ -1,7 +1,7 @@
 """Generate folder/file names for image files by describing them with a
 vision-language model, then naming them with a text model."""
 
-from ai_metadata import generate_filename, generate_foldername, process_single_file
+from ai_metadata import generate_filename, generate_hierarchical_foldername, process_single_file
 
 IMAGE_UNWANTED_WORDS = {
     'image', 'picture', 'photo', 'jpg', 'png', 'jpeg', 'gif', 'bmp', 'svg', 'logo',
@@ -83,7 +83,7 @@ def generate_image_metadata(image_path, image_inference, text_inference, progres
     )
     progress.update(task_id, advance=1 / 3)
 
-    foldername = generate_foldername(
+    foldername = generate_hierarchical_foldername(
         text_inference,
         FOLDERNAME_PROMPT_TEMPLATE.format(description=description),
         description,

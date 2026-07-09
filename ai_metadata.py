@@ -13,6 +13,7 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
+from config import CATEGORY_TAXONOMY
 from data_processing_common import sanitize_filename
 from logging_setup import get_logger
 
@@ -90,6 +91,33 @@ def generate_foldername(text_inference, prompt, description, extra_unwanted_word
         foldername = fallback
 
     return sanitize_filename(foldername, max_words=2)
+
+
+BROAD_CATEGORY_PROMPT_TEMPLATE = """Classify the following summary into exactly one of these categories: {categories}.
+Output only the single category word from the list, nothing else.
+
+Summary: {description}
+
+Category:"""
+
+
+def generate_broad_category(text_inference, description, categories=CATEGORY_TAXONOMY, fallback='other'):
+    """Classify a description into one of a small fixed set of top-level categories."""
+    prompt = BROAD_CATEGORY_PROMPT_TEMPLATE.format(categories=', '.join(categories), description=description)
+    response = text_inference.create_completion(prompt)
+    raw = _strip_label(response['choices'][0]['text'].strip(), 'Category')
+
+    match = re.search(r'[a-zA-Z]+', raw)
+    word = match.group(0).lower() if match else ''
+    return word if word in categories else fallback
+
+
+def generate_hierarchical_foldername(text_inference, prompt, description, extra_unwanted_words, fallback):
+    """Generate a two-level folder path: a fixed broad category (e.g. 'science')
+    over the free-form specific topic from generate_foldername (e.g. 'string_theory')."""
+    specific = generate_foldername(text_inference, prompt, description, extra_unwanted_words, fallback)
+    broad = generate_broad_category(text_inference, description)
+    return broad if specific == broad else f"{broad}/{specific}"
 
 
 def process_single_file(file_path, describe_and_name_fn, silent=False):
