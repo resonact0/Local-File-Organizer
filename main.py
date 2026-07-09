@@ -28,6 +28,11 @@ from text_data_processing import process_text_files
 
 logger = get_logger(__name__)
 
+# Above this many proposed files, printing the full tree just floods the
+# terminal before the user can read it -- show a per-category summary and
+# write the full tree to a file instead.
+TREE_INLINE_LIMIT = 30
+
 
 def ensure_nltk_data():
     """Ensure required NLTK corpora are downloaded, quietly."""
@@ -142,7 +147,13 @@ def organize_directory(input_path, output_path, silent):
         logger.info("Proposed directory structure:")
         if not silent:
             print(os.path.abspath(output_path))
-            cli.print_simulated_tree(cli.simulate_directory_tree(operations, output_path))
+            tree = cli.simulate_directory_tree(operations, output_path)
+            if len(operations) > TREE_INLINE_LIMIT:
+                cli.print_category_summary(tree)
+                preview_path = cli.write_simulated_tree(tree, output_path, LOG_DIR)
+                print(f"Full proposed structure written to: {preview_path}")
+            else:
+                cli.print_simulated_tree(tree)
 
         if cli.get_yes_no("Would you like to proceed with these changes? (yes/no): "):
             os.makedirs(output_path, exist_ok=True)

@@ -1,5 +1,6 @@
 """Interactive command-line prompts and directory-tree display helpers."""
 
+import datetime
 import os
 
 
@@ -70,11 +71,51 @@ def simulate_directory_tree(operations, base_path):
     return tree
 
 
-def print_simulated_tree(tree, prefix=''):
-    """Print a nested-dict directory tree in `tree`-command style."""
+def _tree_lines(tree, prefix=''):
+    """Yield lines of a `tree`-command-style rendering of a nested-dict tree."""
     pointers = ['├── '] * (len(tree) - 1) + ['└── '] if tree else []
     for pointer, key in zip(pointers, tree):
-        print(prefix + pointer + key)
+        yield prefix + pointer + key
         if tree[key]:
             extension = '│   ' if pointer == '├── ' else '    '
-            print_simulated_tree(tree[key], prefix + extension)
+            yield from _tree_lines(tree[key], prefix + extension)
+
+
+def print_simulated_tree(tree, prefix=''):
+    """Print a nested-dict directory tree in `tree`-command style."""
+    for line in _tree_lines(tree, prefix):
+        print(line)
+
+
+def count_files(tree):
+    """Count the file leaves in a simulated directory tree."""
+    if not tree:
+        return 1
+    return sum(count_files(subtree) for subtree in tree.values())
+
+
+def print_category_summary(tree):
+    """Print one line per top-level entry with its file count, so a large
+    proposed structure can be scanned without paging through every file."""
+    for key in sorted(tree, key=lambda k: -count_files(tree[k])):
+        print(f"  {key}: {count_files(tree[key])} file(s)")
+    print(f"  Total: {count_files(tree)} file(s)")
+
+
+def write_simulated_tree(tree, base_path, log_dir):
+    """Write the full proposed directory tree to a timestamped text file
+    under `log_dir`, for review when it's too large to scan in the terminal.
+    Returns the file path."""
+    os.makedirs(log_dir, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_path = os.path.join(log_dir, f"structure_preview_{stamp}.txt")
+    counter = 1
+    while os.path.exists(file_path):
+        file_path = os.path.join(log_dir, f"structure_preview_{stamp}_{counter}.txt")
+        counter += 1
+
+    with open(file_path, 'w') as f:
+        f.write(os.path.abspath(base_path) + '\n')
+        for line in _tree_lines(tree):
+            f.write(line + '\n')
+    return file_path
