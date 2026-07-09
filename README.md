@@ -216,7 +216,17 @@ python main.py
   - The script uses multiprocessing to improve performance.
 
 - **Customizing Prompts:**
-  - You can adjust prompts in `data_processing.py` to change how metadata is generated.
+  - Prompts live as named constants (`DESCRIPTION_PROMPT`, `FILENAME_PROMPT_TEMPLATE`,
+    `FOLDERNAME_PROMPT_TEMPLATE`, etc.) in `image_data_processing.py` (images) and
+    `text_data_processing.py` (text documents) — edit them there to change how metadata
+    is generated. The shared naming/cleanup logic they both call lives in `ai_metadata.py`.
+
+- **Logging:**
+  - All runtime output goes through the `file_organizer` logger (see `logging_setup.py`).
+    Every run writes a fresh, timestamped log file under `logs/` (e.g.
+    `logs/run_20260709_105121.log`) that always captures full detail, regardless of mode.
+    In normal mode, INFO+ messages are also printed to the terminal; in silent mode
+    nothing is printed except the log file's path, shown once at startup.
 
 ## License
 

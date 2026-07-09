@@ -8,7 +8,28 @@ Exposes the same call shapes the rest of the codebase already relies on:
 """
 
 import base64
+
 import ollama
+
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
+
+
+class OllamaInferenceError(RuntimeError):
+    """Raised when a call to the local Ollama server fails."""
+
+
+def _call(model, operation):
+    try:
+        return operation()
+    except Exception as exc:
+        logger.error("Ollama request to model '%s' failed: %s", model, exc)
+        raise OllamaInferenceError(
+            f"Failed to reach Ollama model '{model}'. Is Ollama running "
+            f"(`ollama serve`) and has the model been pulled (`ollama pull {model}`)? "
+            f"Original error: {exc}"
+        ) from exc
 
 
 class OllamaTextInference:
@@ -17,7 +38,9 @@ class OllamaTextInference:
         self.client = ollama.Client(host=host)
 
     def create_completion(self, prompt):
-        response = self.client.generate(model=self.model, prompt=prompt, stream=False)
+        response = _call(self.model, lambda: self.client.generate(
+            model=self.model, prompt=prompt, stream=False
+        ))
         return {'choices': [{'text': response['response']}]}
 
 
@@ -29,7 +52,7 @@ class OllamaVLMInference:
     def _chat(self, prompt, image_path):
         with open(image_path, 'rb') as f:
             image_b64 = base64.b64encode(f.read()).decode('utf-8')
-        response = self.client.generate(
+        response = _call(self.model, lambda: self.client.generate(
             model=self.model, prompt=prompt, images=[image_b64], stream=False
-        )
+        ))
         yield {'choices': [{'delta': {'content': response['response']}}]}
