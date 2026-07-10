@@ -202,6 +202,36 @@ done
 NEXTCLOUD_CONTAINER="${NEXTCLOUD_CONTAINER:-nextcloud_app}"
 NEXTCLOUD_DATA_ROOT="${NEXTCLOUD_DATA_ROOT:-/mnt/data1tb/nextcloud/data}"
 
+nextcloud_container_path() {
+    local abs="$1" rel
+    case "$abs" in
+        "$NEXTCLOUD_DATA_ROOT"/*)
+            rel="${abs#"$NEXTCLOUD_DATA_ROOT"}"
+            echo "/var/www/html/data$rel"
+            ;;
+    esac
+}
+
+# The organizer runs as the invoking user, so folders it creates under the
+# Nextcloud data dir come out user-owned. Nextcloud's PHP process (www-data)
+# then has no write bit on them, so moves/renames of that output silently
+# fail in the Nextcloud web UI even though occ files:scan shows it fine.
+# Fix that up so the UI can manage the organized output going forward.
+nextcloud_fix_ownership() {
+    local path abs cpath
+    command -v docker &> /dev/null || return 0
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$NEXTCLOUD_CONTAINER" || return 0
+    for path in "$@"; do
+        [ -n "$path" ] && [ -e "$path" ] || continue
+        abs=$(readlink -f "$path")
+        cpath=$(nextcloud_container_path "$abs") || continue
+        [ -n "$cpath" ] || continue
+        docker exec -u root "$NEXTCLOUD_CONTAINER" chgrp -R www-data "$cpath" && \
+        docker exec -u root "$NEXTCLOUD_CONTAINER" chmod -R g+w "$cpath" || \
+            echo "Warning: could not fix Nextcloud ownership for $cpath (run it manually)."
+    done
+}
+
 nextcloud_scan() {
     local path abs rel
     command -v docker &> /dev/null || return 0
@@ -223,4 +253,5 @@ nextcloud_scan() {
 # --- Run -------------------------------------------------------------------
 "${SCOPE_WRAP[@]}" "${NICE_CPU[@]}" python main.py "$INPUT_DIR" "$OUTPUT_DIR"
 
+nextcloud_fix_ownership "$OUTPUT_DIR"
 nextcloud_scan "$INPUT_DIR" "$OUTPUT_DIR"
