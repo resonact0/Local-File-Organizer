@@ -8,7 +8,7 @@ and where its files go, main.py just wires the phases together."""
 import re
 from collections import Counter
 
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from config import CATEGORY_TAXONOMY
 from data_processing_common import sanitize_filename
@@ -232,6 +232,7 @@ def describe_items(text_inference, items, silent=False):
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TimeElapsedColumn(),
+        TimeRemainingColumn(),
         disable=silent,
     ) as progress:
         task_id = progress.add_task("Describing items", total=len(items) or 1)
@@ -352,6 +353,7 @@ def assign_categories(text_inference, items, taxonomy, batch_size=20, silent=Fal
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TimeElapsedColumn(),
+        TimeRemainingColumn(),
         disable=silent,
     ) as progress:
         task_id = progress.add_task("Categorizing items", total=len(numbered) or 1)

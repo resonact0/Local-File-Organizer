@@ -219,14 +219,20 @@ def is_junk_folder_name(name):
 
 
 def split_by_folder_trust(file_paths, base_path):
-    """Split files into (trusted, untrusted) based on whether the folder(s)
-    they already sit in look like meaningful, user-chosen labels.
+    """Split files into (trusted, untrusted) based on whether the file's
+    top-level folder under `base_path` looks like a meaningful, user-chosen
+    label.
 
     A file is "trusted" (its existing location is kept as-is, skipping AI
-    classification) only if it sits inside at least one subfolder of
-    `base_path` and none of the folder names between `base_path` and the file
-    look like junk. Files sitting directly in `base_path`, or under any junk
-    folder name, are "untrusted" and go through the normal content pipeline.
+    classification) only if it sits inside a subfolder of `base_path` whose
+    top-level name isn't junk. Only the top-level name is checked -- not
+    every intermediate folder -- because items.py groups a trusted folder by
+    its top-level name alone and keeps everything under it intact as one
+    unit; an ordinary nested folder name (e.g. a "files" or "old" subfolder
+    several levels down inside an otherwise well-named course/project folder)
+    shouldn't shatter that folder into dozens of individually-read items.
+    Files sitting directly in `base_path`, or under a junk top-level folder
+    name, are "untrusted" and go through the normal content pipeline.
     """
     trusted, untrusted = [], []
     for fp in file_paths:
@@ -234,8 +240,8 @@ def split_by_folder_trust(file_paths, base_path):
         if rel_dir == '.':
             untrusted.append(fp)
             continue
-        components = rel_dir.split(os.sep)
-        if any(is_junk_folder_name(c) for c in components):
+        top_dir = rel_dir.split(os.sep)[0]
+        if is_junk_folder_name(top_dir):
             untrusted.append(fp)
         else:
             trusted.append(fp)

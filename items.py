@@ -136,11 +136,17 @@ def build_items(file_paths, input_path, image_inference, silent=False):
     for fp, description in describe_image_files(image_files, image_inference, silent=silent):
         items.append(_image_item(fp, description))
 
+    folder_count = sum(1 for it in items if it.kind == 'folder')
+    loose_count = len(items) - folder_count
     logger.info(
         "Built %d item(s): %d folder, %d loose file",
-        len(items),
-        sum(1 for it in items if it.kind == 'folder'),
-        sum(1 for it in items if it.kind != 'folder'),
+        len(items), folder_count, loose_count,
+    )
+    logger.info(
+        "%d folder(s) kept intact as a single item each; %d loose file(s) will each get "
+        "their own description call -- this loose-file count is what drives runtime, "
+        "roughly loose_count x (a few seconds to ~1 minute per item depending on file size).",
+        folder_count, loose_count,
     )
     return items
 
